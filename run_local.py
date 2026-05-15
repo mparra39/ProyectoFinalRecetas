@@ -541,7 +541,11 @@ def main() -> None:
         llm,
     )
     demo.queue(max_size=2)
-    demo.launch(server_port=args.port, share=args.share)
+    demo.launch(
+        server_name=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"),
+        server_port=args.port,
+        share=args.share,
+    )
 
 
 if __name__ == "__main__":

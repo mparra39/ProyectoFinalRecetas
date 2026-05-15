@@ -138,28 +138,38 @@ python deploy_to_hf.py --skip-smoke
 
 La opción más rápida para correr la app sin instalar nada manualmente.
 
-**Requisitos previos:** tener `data/processed/` poblado (pasos 1–3 del flujo) y Docker instalado.
+**Requisitos previos:** Docker instalado y `data/processed/` poblado (pasos 1–3 del flujo).
+
+El Dockerfile usa `requirements-inference.txt` con torch CPU-only (~500 MB vs ~2 GB del build CUDA). El build completo tarda ~5 min en la primera vez; las reconstrucciones posteriores son rápidas gracias al caché de capas.
 
 ```bash
-# Construir la imagen
+# Construir la imagen (primera vez ~5 min, luego usa caché)
 docker compose build
 
-# Modo mínimo — solo FAISS + texto (sin CNN ni LLM)
+# Modo mínimo — solo FAISS + búsqueda de texto
 docker compose up app
 
-# Modo completo — CNN + LLM (requiere models/ poblado)
+# Modo completo — CNN + LLM (requiere models/ con .pth y .gguf)
 docker compose --profile full up app-full
 ```
 
 La app queda disponible en `http://localhost:7860`.
 
-Los directorios `data/processed/` y `models/` se montan como volúmenes de solo lectura — no se copian dentro de la imagen. Al actualizar los artefactos localmente, basta con reiniciar el contenedor sin reconstruir la imagen.
-
-Para pasar variables de entorno:
+`data/processed/` y `models/` se montan como volúmenes de solo lectura — no se copian dentro de la imagen. Al actualizar los artefactos localmente, basta con reiniciar el contenedor sin reconstruir.
 
 ```bash
+# Pasar variables de entorno en el mismo comando
 HF_TOKEN=hf_... HF_USERNAME=tu-usuario docker compose up app
 ```
+
+**Archivos Docker:**
+
+| Archivo | Propósito |
+|---|---|
+| `Dockerfile` | Imagen base con dependencias de inferencia |
+| `docker-compose.yml` | Servicios `app` (mínimo) y `app-full` (CNN + LLM) |
+| `requirements-inference.txt` | Deps exactas para el contenedor (CPU torch, sin training tools) |
+| `.dockerignore` | Excluye `data/`, `models/`, `notebooks/` del contexto de build |
 
 ---
 

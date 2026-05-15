@@ -1,0 +1,18 @@
+# CPU-only torch builds — ~1.5 GB smaller than the default CUDA wheels
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.0+cpu
+torchvision==0.18.0+cpu
+
+gradio==4.44.0
+faiss-cpu==1.8.0
+sentence-transformers==3.0.1
+transformers==4.44.0
+huggingface-hub==0.36.2
+pandas==2.2.2
+numpy==1.26.4
+pyarrow>=16.0
+Pillow==10.4.0
+rapidfuzz==3.9.6
+
+# LLM inference — needed for narration and chat; remove if not using the GGUF model
+llama-cpp-python==0.2.90

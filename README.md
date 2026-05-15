@@ -134,6 +134,35 @@ python deploy_to_hf.py --skip-smoke
 
 ---
 
+## Docker
+
+La opción más rápida para correr la app sin instalar nada manualmente.
+
+**Requisitos previos:** tener `data/processed/` poblado (pasos 1–3 del flujo) y Docker instalado.
+
+```bash
+# Construir la imagen
+docker compose build
+
+# Modo mínimo — solo FAISS + texto (sin CNN ni LLM)
+docker compose up app
+
+# Modo completo — CNN + LLM (requiere models/ poblado)
+docker compose --profile full up app-full
+```
+
+La app queda disponible en `http://localhost:7860`.
+
+Los directorios `data/processed/` y `models/` se montan como volúmenes de solo lectura — no se copian dentro de la imagen. Al actualizar los artefactos localmente, basta con reiniciar el contenedor sin reconstruir la imagen.
+
+Para pasar variables de entorno:
+
+```bash
+HF_TOKEN=hf_... HF_USERNAME=tu-usuario docker compose up app
+```
+
+---
+
 ## Dependencias por etapa
 
 | Etapa | Instalación |

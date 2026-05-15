@@ -1,0 +1,30 @@
+services:
+  app:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data/processed:/app/data/processed:ro
+      - ./models:/app/models:ro
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_USERNAME=${HF_USERNAME:-Grupo-Parquet-ITESO}
+      - HF_SPACE_NAME=${HF_SPACE_NAME:-ProyectoFinal_recetas}
+    # Remove --no-cnn / --no-llm when the model files are present in ./models/
+    command: python run_local.py --no-cnn --no-llm
+
+  # Full mode: CNN + LLM (requires models/ to be populated)
+  app-full:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data/processed:/app/data/processed:ro
+      - ./models:/app/models:ro
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_USERNAME=${HF_USERNAME:-Grupo-Parquet-ITESO}
+      - HF_SPACE_NAME=${HF_SPACE_NAME:-ProyectoFinal_recetas}
+    command: python run_local.py
+    profiles:
+      - full

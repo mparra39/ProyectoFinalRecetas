@@ -1,0 +1,28 @@
+.git
+.gitignore
+.claude/
+.env
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Large artifacts — mounted as volumes at runtime
+data/
+models/
+
+# Not needed inside the container
+llama.cpp/
+notebooks/
+space_repo/
+reports/
+references/
+
+# Dev tooling
+.venv/
+venv/
+env/
+.DS_Store
+.idea/
+.vscode/
+Makefile

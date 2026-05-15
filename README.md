@@ -2,7 +2,7 @@
 
 Sistema multimodal de recomendación de recetas que combina búsqueda semántica (FAISS), clasificación de imágenes (EfficientNet-B0) y generación de texto (TinyLlama QLoRA).
 
-Demo: [ramonsj11/ProyectoFinal_recetas](https://huggingface.co/spaces/ramonsj11/ProyectoFinal_recetas)
+Demo: [Grupo-Parquet-ITESO/ProyectoFinal_recetas](https://huggingface.co/spaces/Grupo-Parquet-ITESO/ProyectoFinal_recetas)
 
 ---
 
@@ -46,7 +46,7 @@ pip install -e ".[train]"
 
 ```bash
 export HF_TOKEN="hf_..."           # requerido para deploy y subida de modelos
-export HF_USERNAME="tu-usuario"    # default: ramonsj11
+export HF_USERNAME="tu-usuario"    # default: Grupo-Parquet-ITESO
 ```
 
 ---
@@ -148,7 +148,7 @@ python deploy_to_hf.py --skip-smoke
 
 | Recurso | ID |
 |---|---|
-| Space (demo) | `ramonsj11/ProyectoFinal_recetas` |
-| CNN | `ramonsj11/recipe-ingredient-classifier` |
-| LLM GGUF | `ramonsj11/recipe-llm-gguf` |
+| Space (demo) | `Grupo-Parquet-ITESO/ProyectoFinal_recetas` |
+| CNN | `Grupo-Parquet-ITESO/recipe-ingredient-classifier` |
+| LLM GGUF | `Grupo-Parquet-ITESO/recipe-llm-gguf` |
 | Dataset | `wafaaelhusseini/extended-recipes-dataset-64k-dishes` |

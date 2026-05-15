@@ -10,8 +10,8 @@ app_file: app_optimized.py
 pinned: false
 license: mit
 models:
-  - ramonsj11/recipe-ingredient-classifier
-  - ramonsj11/recipe-llm-gguf
+  - Grupo-Parquet-ITESO/recipe-ingredient-classifier
+  - Grupo-Parquet-ITESO/recipe-llm-gguf
 datasets:
   - wafaaelhusseini/extended-recipes-dataset-64k-dishes
 ---

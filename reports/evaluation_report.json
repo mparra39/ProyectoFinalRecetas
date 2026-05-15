@@ -1,0 +1,327 @@
+{
+  "generated_at": "2026-05-12T21:43:02.070907Z",
+  "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "embedding_dim": 384,
+  "dataset": "wafaaelhusseini/extended-recipes-dataset-64k-dishes",
+  "A_dataset_coverage": {
+    "total_recipes": 60614,
+    "n_with_dish_image": 3292,
+    "pct_with_dish_image": 5.43,
+    "pct_ingredients_with_image_weighted": 84.32,
+    "pct_ingredients_unique_with_image": 81.42,
+    "cook_speed_distribution": {
+      "fast": 46132,
+      "medium": 13279,
+      "slow": 1203
+    },
+    "top_15_categories": [
+      {
+        "category": "Main Dishes",
+        "count": 3341
+      },
+      {
+        "category": "Healthy Recipes",
+        "count": 2093
+      },
+      {
+        "category": "Appetizers And Snacks",
+        "count": 2033
+      },
+      {
+        "category": "Cakes",
+        "count": 1922
+      },
+      {
+        "category": "Cookies",
+        "count": 1832
+      },
+      {
+        "category": "Beef Recipes",
+        "count": 1386
+      },
+      {
+        "category": "Breads",
+        "count": 1328
+      },
+      {
+        "category": "Desserts",
+        "count": 1243
+      },
+      {
+        "category": "Pork",
+        "count": 1186
+      },
+      {
+        "category": "Breakfast And Brunch",
+        "count": 1148
+      },
+      {
+        "category": "Mexican",
+        "count": 1045
+      },
+      {
+        "category": "Christmas",
+        "count": 1002
+      },
+      {
+        "category": "Vegetarian",
+        "count": 951
+      },
+      {
+        "category": "Christmas Cookies",
+        "count": 942
+      },
+      {
+        "category": "Casseroles",
+        "count": 939
+      }
+    ],
+    "top_10_dietary_combinations": [
+      {
+        "combination": "gluten free, halal, kosher, nut free",
+        "count": 18705
+      },
+      {
+        "combination": "halal, kosher, nut free",
+        "count": 13549
+      },
+      {
+        "combination": "gluten free, halal, kosher, nut free, vegan",
+        "count": 7029
+      },
+      {
+        "combination": "gluten free, nut free",
+        "count": 5320
+      },
+      {
+        "combination": "halal, kosher",
+        "count": 3542
+      },
+      {
+        "combination": "gluten free, halal, kosher",
+        "count": 2517
+      },
+      {
+        "combination": "halal, kosher, nut free, vegan",
+        "count": 1919
+      },
+      {
+        "combination": "gluten free, kosher, nut free",
+        "count": 1585
+      },
+      {
+        "combination": "nut free",
+        "count": 1364
+      },
+      {
+        "combination": "gluten free, kosher, nut free, vegan",
+        "count": 1172
+      }
+    ]
+  },
+  "B_retrieval_quality": {
+    "n_queries": 20,
+    "k_retrieved": 10,
+    "mean_precision_at_5": 0.93,
+    "mean_mrr": 0.9666,
+    "note": "Relevancia definida como: al menos 1 expected_keyword presente en recipe_title + embedding_text (case-insensitive substring match)",
+    "per_query": [
+      {
+        "id": 1,
+        "query": "quick vegetarian pasta dinner",
+        "expected": "pasta, vegetarian",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Quick Pasta Sauce",
+        "top1_similarity": 0.7505
+      },
+      {
+        "id": 2,
+        "query": "easy vegan stir fry with tofu",
+        "expected": "tofu, vegan",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Air Fryer Tofu",
+        "top1_similarity": 0.7682
+      },
+      {
+        "id": 3,
+        "query": "slow cooked beef stew hearty",
+        "expected": "beef, stew",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Hearty Slow Cooker Beef Stew",
+        "top1_similarity": 0.7821
+      },
+      {
+        "id": 4,
+        "query": "braised lamb with herbs and red wine",
+        "expected": "lamb",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Red Wine-Braised Lamb Shanks",
+        "top1_similarity": 0.7201
+      },
+      {
+        "id": 5,
+        "query": "gluten free chocolate dessert cake",
+        "expected": "chocolate, gluten",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Flourless Chocolate Cake",
+        "top1_similarity": 0.7641
+      },
+      {
+        "id": 6,
+        "query": "dairy free coconut milk curry",
+        "expected": "coconut, curry",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Vegetable Curry with Coconut Milk",
+        "top1_similarity": 0.6954
+      },
+      {
+        "id": 7,
+        "query": "nut free kids lunch sandwich wrap",
+        "expected": "sandwich, wrap",
+        "precision_at_5": 0.8,
+        "reciprocal_rank": 1.0,
+        "top1_title": "School Lunch Bagel Sandwich",
+        "top1_similarity": 0.617
+      },
+      {
+        "id": 8,
+        "query": "italian homemade pizza margherita",
+        "expected": "pizza",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Four Cheese Margherita Pizza",
+        "top1_similarity": 0.7834
+      },
+      {
+        "id": 9,
+        "query": "thai green curry spicy vegetables",
+        "expected": "curry, thai",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Authentic Thai Green Curry",
+        "top1_similarity": 0.7847
+      },
+      {
+        "id": 10,
+        "query": "mexican guacamole avocado fresh lime",
+        "expected": "avocado, guacamole",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Simply Guacamole",
+        "top1_similarity": 0.7566
+      },
+      {
+        "id": 11,
+        "query": "quick scrambled eggs breakfast",
+        "expected": "egg, breakfast",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Baked Scrambled Eggs",
+        "top1_similarity": 0.6475
+      },
+      {
+        "id": 12,
+        "query": "chocolate chip cookies homemade baking",
+        "expected": "chocolate, cookie",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "5-Ingredient Easy Chocolate Chip Cookies",
+        "top1_similarity": 0.8276
+      },
+      {
+        "id": 13,
+        "query": "fresh green salad with avocado lemon dressing",
+        "expected": "salad, avocado",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Strawberry Avocado Salad",
+        "top1_similarity": 0.7746
+      },
+      {
+        "id": 14,
+        "query": "shrimp pasta garlic butter lemon",
+        "expected": "shrimp, pasta",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Grilled Garlic and Herb Shrimp",
+        "top1_similarity": 0.7179
+      },
+      {
+        "id": 15,
+        "query": "baked salmon with vegetables healthy",
+        "expected": "salmon",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Best Salmon Bake",
+        "top1_similarity": 0.7458
+      },
+      {
+        "id": 16,
+        "query": "lentil soup vegan hearty winter",
+        "expected": "lentil, soup",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Sopa de Lentejas (Andalucian Lentil Soup)",
+        "top1_similarity": 0.7882
+      },
+      {
+        "id": 17,
+        "query": "tomato basil soup vegetarian creamy",
+        "expected": "tomato, soup",
+        "precision_at_5": 1.0,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Rich and Creamy Tomato Basil Soup",
+        "top1_similarity": 0.8412
+      },
+      {
+        "id": 18,
+        "query": "pollo asado con limón y ajo rápido",
+        "expected": "chicken, lemon",
+        "precision_at_5": 0.8,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Caldo de Pollo",
+        "top1_similarity": 0.3573
+      },
+      {
+        "id": 19,
+        "query": "ensalada fresca vegetariana con aguacate",
+        "expected": "salad, avocado",
+        "precision_at_5": 0.2,
+        "reciprocal_rank": 0.333,
+        "top1_title": "Quick Vegetarian Picadillo Empanadas",
+        "top1_similarity": 0.4939
+      },
+      {
+        "id": 20,
+        "query": "gâteau au chocolat facile rapide sans gluten",
+        "expected": "chocolate, gluten",
+        "precision_at_5": 0.8,
+        "reciprocal_rank": 1.0,
+        "top1_title": "Gluten-Free Choc Chip Oatmeal Muffins",
+        "top1_similarity": 0.5135
+      }
+    ]
+  },
+  "C_embedding_diversity": {
+    "n_random_pairs": 1000,
+    "n_category_pairs_each": 500,
+    "mean_cosine_dist_random": 0.59502,
+    "mean_cosine_dist_same_cat": 0.478199,
+    "mean_cosine_dist_diff_cat": 0.609232,
+    "diversity_ratio_diff_over_same": 1.274,
+    "categorical_clustering_ok": true,
+    "tsne_params": {
+      "n_samples": 2000,
+      "perplexity": 30,
+      "n_iter": 1000,
+      "pca_pre": 50,
+      "kl_divergence": 1.3105
+    }
+  }
+}

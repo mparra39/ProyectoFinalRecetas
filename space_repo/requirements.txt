@@ -1,0 +1,32 @@
+# ── Web UI ───────────────────────────────────────────────────────────────────
+gradio==4.44.0
+
+# ── Deep learning (CPU-only builds — no CUDA, keeps image under 5 GB limit) ──
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.0+cpu
+torchvision==0.18.0+cpu
+
+# ── Transformers / embeddings ─────────────────────────────────────────────────
+transformers==4.44.0
+sentence-transformers==3.0.1
+huggingface_hub==0.36.2
+
+# ── LLM inference (GGUF / llama.cpp Python bindings, CPU wheel) ───────────────
+# Pre-built CPU wheel — no compilation required on the Space runner
+llama-cpp-python==0.2.90
+
+# ── Vector search ─────────────────────────────────────────────────────────────
+faiss-cpu==1.8.0
+
+# ── Data handling ─────────────────────────────────────────────────────────────
+pandas==2.2.2
+numpy==1.26.4
+
+# ── Image processing ──────────────────────────────────────────────────────────
+Pillow==10.4.0
+
+# ── Fuzzy string matching (ingredient name normalisation) ─────────────────────
+rapidfuzz==3.9.6
+
+# ── PEFT (needed only if loading LoRA adapters directly; skip if using GGUF) ──
+# peft==0.12.0

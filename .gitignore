@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Environments and secrets
+.env
+.venv/
+venv/
+env/
+.cache/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.codex/
+.agents/
+
+# Logs and local runtime output
+*.log
+logs/
+
+# Project data and generated model artifacts
+data/
+models/*
+!models/.gitkeep
+!models/class_labels.json
+models/*.pth
+models/*.pt
+models/*.bin
+models/*.safetensors
+models/*.gguf
+models/tinyllama-recipes-lora/
+models/tinyllama-recipes-merged/
+
+# Hugging Face staged large artifacts
+space_repo/*.index
+space_repo/*.parquet
+space_repo/*.npy
+space_repo/*.pth
+space_repo/*.pt
+space_repo/*.bin
+space_repo/*.safetensors
+space_repo/*.gguf
+
+# External/vendor dependency cloned locally. Clone it when needed; do not commit it.
+llama.cpp/
+
+# Vendored llama.cpp build output
+llama.cpp/build*/
+llama.cpp/models/

@@ -1,0 +1,27 @@
+# HF Spaces default text-file handling
+* text=auto
+
+# ── Git LFS — large binary artifacts ─────────────────────────────────────────
+
+# TinyLlama GGUF quantised model
+*.gguf filter=lfs diff=lfs merge=lfs -text
+
+# FAISS vector index
+*.index filter=lfs diff=lfs merge=lfs -text
+
+# Recipe embeddings dataframe
+*.parquet filter=lfs diff=lfs merge=lfs -text
+
+# Raw numpy embedding matrix
+*.npy filter=lfs diff=lfs merge=lfs -text
+
+# PyTorch model weights (EfficientNet state_dict)
+*.pth filter=lfs diff=lfs merge=lfs -text
+
+# Common large model/data formats (forward-compatibility)
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.safetensors filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text
+*.h5 filter=lfs diff=lfs merge=lfs -text
+*.pkl filter=lfs diff=lfs merge=lfs -text
+*.arrow filter=lfs diff=lfs merge=lfs -text

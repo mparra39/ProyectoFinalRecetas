@@ -1,0 +1,8 @@
+limitacion,impacto,mejora_propuesta,esfuerzo_estimado
+"Cobertura parcial de imágenes de ingredientes (~81% único, ~84% ponderado)",medio,"Integrar Open Food Facts API o scraping de Wikimedia Commons para ingredientes sin cobertura; priorizar los 8,712 ingredientes únicos sin imagen",alto
+Truncamiento de recetas largas a 512 tokens (pérdida de pasos finales),medio,Usar modelos con ventana extendida (all-mpnet-base-v2 o Longformer) o chunking jerárquico: embed por sección y agregar con weighted pooling,medio
+Sistema retrieval-based con generación local limitada,medio,"Mejorar TinyLlama fine-tuned/GGUF con mejores prompts, evaluación humana y modelos más capaces si el presupuesto de inferencia lo permite; el retrieval provee contexto y el LLM genera texto adaptado",medio
+Sesgo hacia cocina occidental (Fruits-360 + Epicurious como fuentes principales),medio,"Añadir datasets de cocina asiática, latinoamericana y africana (Yummly, AllRecipes API, Tasty API); rebalancear ingredient_catalog con fuentes locales",alto
+Sin validación humana de los matches fuzzy de ingredientes (threshold 72),bajo,Crear interfaz de validación manual (Streamlit) o crowdsourcing para verificar matches con score < 85; marcar los inciertos con flag 'fuzzy_unverified',medio
+Ausencia de feedback loop — sin fine-tuning sobre preferencias reales,alto,"Implementar bi-encoder fine-tuning con pares (query, receta_preferida) usando MNRL loss; recolectar señales implícitas (clicks, tiempo en página)",alto
+Cobertura de imagen de platillo muy baja (~5.4% via Epicurious),medio,"Buscar datasets adicionales de imágenes de platos (Food-101, UEC-Food256) y aplicar matching por categoría; o usar DALL-E/Stable Diffusion para generar imágenes",medio

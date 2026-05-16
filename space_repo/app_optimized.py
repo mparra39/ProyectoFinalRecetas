@@ -1,16 +1,5 @@
-"""
-app_optimized.py  ―  Demo Multimodal de Recomendador de Recetas  (build optimizado)
-Hugging Face Space  |  Solo CPU  |  Gradio 4.44
-Notas de optimización:
-  • CNN + LLM se cargan de forma lazy en el primer uso (lru_cache + threading.Lock).
-  • UX en dos fases: Fase 1 (<3 s) = ingredientes + tabla de recetas;
-                     Fase 2 (~30 s) = narración LLM, activada por el usuario.
-  • Panel de ingredientes gr.HTML — imágenes reales O badges de texto coloreado.
-  • Panel de transparencia del pipeline — consulta, puntuaciones, tiempos por etapa.
-  • gr.Examples — 5 consultas de texto predefinidas para demos instantáneas.
-"""
+# Recomendador de Recetas — Gradio app para Hugging Face Space
 
-# ── biblioteca estándar ───────────────────────────────────────────────────────
 import base64
 import functools
 import json
@@ -19,11 +8,11 @@ import threading
 import time
 from pathlib import Path
 
-# ── terceros ──────────────────────────────────────────────────────────────────
+import numpy as np
+
 import faiss
 import gradio as gr
 
-# ── Parche 1: gradio_client 0.6.x — los valores bool de JSON-Schema provocan TypeError ───
 import gradio_client.utils as _gcu
 
 _orig_get_type = _gcu.get_type
@@ -42,7 +31,6 @@ def _safe_jstpt(schema, defs=None):
 _gcu.get_type                    = _safe_get_type
 _gcu._json_schema_to_python_type = _safe_jstpt
 
-# ── Parche 2: Starlette >=1.0 cambió TemplateResponse(name, ctx) → (req, name) ─
 import starlette.templating as _st
 
 _orig_TemplateResponse = _st.Jinja2Templates.TemplateResponse
@@ -58,46 +46,31 @@ def _compat_TemplateResponse(self, *args, **kwargs):
     return _orig_TemplateResponse(self, *args, **kwargs)
 
 _st.Jinja2Templates.TemplateResponse = _compat_TemplateResponse
-# ─────────────────────────────────────────────────────────────────────────────
 
 import pandas as pd
 import torch
-import torchvision.models as models
-import torchvision.transforms as T
 from huggingface_hub import hf_hub_download
-try:
-    from llama_cpp import Llama
-    _LLAMA_AVAILABLE = True
-except ImportError:
-    Llama = None  # type: ignore[assignment, misc]
-    _LLAMA_AVAILABLE = False
-    print("llama-cpp-python no disponible — LLM desactivado")
+from llama_cpp import Llama
 from PIL import Image
 from rapidfuzz import process as rfprocess
 from sentence_transformers import SentenceTransformer
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURACIÓN
-# ─────────────────────────────────────────────────────────────────────────────
-HF_USERNAME   = os.environ.get("HF_USERNAME",   "ramonsj11")
+HF_USERNAME   = os.environ.get("HF_USERNAME",   "Grupo-Parquet-ITESO")
 HF_SPACE_NAME = os.environ.get("HF_SPACE_NAME", "ProyectoFinal_recetas")
-CNN_REPO      = f"{HF_USERNAME}/recipe-ingredient-classifier"
-LLM_REPO      = f"{HF_USERNAME}/recipe-llm-gguf"
+CNN_REPO      = os.environ.get("CNN_REPO",  f"{HF_USERNAME}/recipe-ingredient-classifier")
+LLM_REPO      = os.environ.get("LLM_REPO",  "Grupo-Parquet-ITESO/recipe-llm-gguf")
+LLM_GGUF_FILE = os.environ.get("LLM_GGUF_FILE", "tinyllama-recipes-q4.gguf")
 EMBED_MODEL   = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _EMBED_SHORT  = "multilingual-MiniLM-L12-v2  ·  384-dim"
 
 DIETARY_CHOICES = ["any", "vegetarian", "vegan", "gluten-free", "dairy-free"]
 SPEED_CHOICES   = ["any", "fast", "medium", "slow"]
 
-# Si la confianza del modelo está por debajo de este porcentaje, ignoramos ese ingrediente.
-# Esto evita ingredientes "alucinados" cuando la imagen no es clara.
-CNN_CONFIDENCE_THRESHOLD = 0.15   # 15%
-
-# Si la predicción TOP-1 no alcanza este umbral, el modelo probablemente está confundido con la imagen.
-CNN_TOP1_MIN_CONFIDENCE  = 0.35   # 35%
-
-# Número máximo de ingredientes a mostrar en condiciones normales.
-CNN_MAX_RESULTS = 5
+CLIP_MODEL_NAME    = "clip-ViT-B-32"
+# Escenas multi-ingrediente tienen similitudes bajas (~0.14-0.18) — threshold bajo intencional.
+CLIP_MIN_SIMILARITY = 0.15
+CLIP_MIN_RESULTS    = 3   # devolver al menos este número aunque estén bajo el threshold
+CLIP_MAX_RESULTS    = 7
 
 # Paleta pastel para badges de ingredientes no encontrados en el catálogo
 _BADGE_COLORS = [
@@ -106,9 +79,6 @@ _BADGE_COLORS = [
 ]
 _GREY = Image.new("RGB", (200, 200), color=(210, 210, 210))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ARTEFACTOS DE ARRANQUE — FAISS + embeddings (rápido, siempre necesario)
-# ─────────────────────────────────────────────────────────────────────────────
 print("Cargando índice FAISS…")
 faiss_index = faiss.read_index("recipe_faiss.index")
 
@@ -146,116 +116,112 @@ print("Cargando SentenceTransformer…")
 # Modelo multilingüe — soporta consultas en español e inglés (384-dim, igual que antes)
 embedding_model = SentenceTransformer(EMBED_MODEL)
 
-print("Artefactos de arranque listos ✅  CNN + LLM se cargarán en el primer uso.")
+print("Artefactos de arranque listos. CLIP y LLM se cargarán en el primer uso.")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OPTIMIZACIÓN 1 + 2 — cargadores lazy con lru_cache y getters seguros para hilos
-# ─────────────────────────────────────────────────────────────────────────────
-_cnn_lock = threading.Lock()
+_clip_lock = threading.Lock()
+
+# Embeddings de texto pre-computados para todos los ingredientes (se llenan al primer uso de CLIP)
+_ingredient_names_cache: list[str] = []
+_ingredient_text_embs_cache: "np.ndarray | None" = None
+
+@functools.lru_cache(maxsize=1)
+def _load_clip_cached() -> "SentenceTransformer":
+    return SentenceTransformer(CLIP_MODEL_NAME)
+
 _llm_lock = threading.Lock()
+_llm_instance: "Llama | None" = None
 
-_cnn_tf = T.Compose([
-    T.Resize(256),
-    T.CenterCrop(224),
-    T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
-
-@functools.lru_cache(maxsize=1)
-def _load_cnn_cached() -> torch.nn.Module:
-    """Descarga pesos y construye el modelo exactamente una vez; resultado cacheado en el proceso."""
-    if NUM_CLASSES == 0:
-        raise RuntimeError("class_labels.json no encontrado — CNN no disponible")
-    weights_path = hf_hub_download(repo_id=CNN_REPO, filename="efficientnet_ingredients.pth")
-    mdl = models.efficientnet_b0(weights=None)
-    mdl.classifier[1] = torch.nn.Linear(1280, NUM_CLASSES)
-    mdl.load_state_dict(torch.load(weights_path, map_location="cpu"))
-    mdl.eval()
-    return mdl
-
-
-@functools.lru_cache(maxsize=1)
-def _load_llm_cached() -> "Llama":
-    """Descarga GGUF e inicializa Llama exactamente una vez; resultado cacheado en el proceso."""
-    if not _LLAMA_AVAILABLE:
-        raise RuntimeError("llama-cpp-python no instalado — LLM no disponible")
-    gguf_path = hf_hub_download(repo_id=LLM_REPO, filename="tinyllama-recipes-q4.gguf")
-    return Llama(model_path=gguf_path, n_ctx=2048, n_threads=4, verbose=False)
-
-
-def get_cnn() -> torch.nn.Module:
-    """Getter lazy seguro para hilos — seguro para llamar desde peticiones Gradio concurrentes."""
-    with _cnn_lock:
-        return _load_cnn_cached()
-
-
-def get_llm() -> Llama:
-    """Getter lazy seguro para hilos — seguro para llamar desde peticiones Gradio concurrentes."""
+def _get_llm() -> "Llama":
+    global _llm_instance
     with _llm_lock:
-        return _load_llm_cached()
+        if _llm_instance is None:
+            token = os.environ.get("HF_TOKEN", "")
+            gguf_path = hf_hub_download(
+                repo_id=LLM_REPO,
+                filename=LLM_GGUF_FILE,
+                token=token or None,
+            )
+            _llm_instance = Llama(
+                model_path=gguf_path,
+                n_ctx=1024,
+                n_threads=4,
+                verbose=False,
+            )
+        return _llm_instance
 
+def _llm_generate(prompt: str, max_new_tokens: int = 200) -> str:
+    llm = _get_llm()
+    out = llm(
+        prompt,
+        max_tokens=max_new_tokens,
+        temperature=0.7,
+        stop=["</s>", "<|user|>", "<|system|>"],
+        echo=False,
+    )
+    return out["choices"][0]["text"].strip()
 
-def _cnn_loaded() -> bool:
-    return _load_cnn_cached.cache_info().currsize > 0
+def get_clip() -> "SentenceTransformer":
+    with _clip_lock:
+        return _load_clip_cached()
 
+def _clip_loaded() -> bool:
+    return _load_clip_cached.cache_info().currsize > 0
 
-def _llm_loaded() -> bool:
-    return _load_llm_cached.cache_info().currsize > 0
+def _get_ingredient_text_embeddings() -> tuple[list[str], "np.ndarray"]:
+    global _ingredient_names_cache, _ingredient_text_embs_cache
+    if _ingredient_text_embs_cache is None:
+        model  = get_clip()
+        seen, unique = set(), []
+        for name in class_labels.values():
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(name)
+        _ingredient_names_cache = unique
+        # Prompt ensembling: promediar 3 templates mejora detección en escenas multi-ingrediente
+        templates = [
+            lambda n: f"a photo of {n}",
+            lambda n: f"{n}",
+            lambda n: f"fresh {n}",
+        ]
+        embs_per_template = [
+            model.encode([t(n) for n in unique], normalize_embeddings=True,
+                         batch_size=64, show_progress_bar=False)
+            for t in templates
+        ]
+        avg = np.mean(embs_per_template, axis=0)
+        norms = np.linalg.norm(avg, axis=1, keepdims=True)
+        _ingredient_text_embs_cache = (avg / norms).astype("float32")
+    return _ingredient_names_cache, _ingredient_text_embs_cache
 
+def detect_ingredients_clip(image: Image.Image) -> tuple[list[tuple[str, float]], bool]:
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FUNCIÓN 1 — clasificación de ingredientes  (CNN lazy)
-# ─────────────────────────────────────────────────────────────────────────────
-def classify_ingredients(image: Image.Image) -> tuple[list[tuple[str, float]], bool]:
-    """
-    Devuelve (lista_ingredientes, imagen_poco_confiable).
-    - Solo incluye predicciones con confianza >= CNN_CONFIDENCE_THRESHOLD.
-    - imagen_poco_confiable = True cuando TOP-1 no supera CNN_TOP1_MIN_CONFIDENCE,
-      indicando que la imagen no es ideal para el modelo.
-    """
-    model  = get_cnn()
-    tensor = _cnn_tf(image.convert("RGB")).unsqueeze(0)
-    with torch.no_grad():
-        probs = torch.softmax(model(tensor), dim=1)[0]
-    top10 = torch.topk(probs, 10)
+    model = get_clip()
+    img_emb = model.encode(image.convert("RGB"), normalize_embeddings=True)
 
-    all_results = [
-        (class_labels.get(str(i.item()), f"clase_{i.item()}"), s.item())
-        for i, s in zip(top10.indices, top10.values)
-    ]
+    names, text_embs = _get_ingredient_text_embeddings()
+    sims = (img_emb @ text_embs.T).astype(float)
 
-    # ── Detectar imagen poco confiable ──────────────────────────────────────
-    top1_confidence = all_results[0][1] if all_results else 0.0
-    low_confidence_image = top1_confidence < CNN_TOP1_MIN_CONFIDENCE
+    ranked = sorted(
+        ((names[i], float(sims[i])) for i in range(len(names))),
+        key=lambda x: x[1], reverse=True,
+    )
 
-    # ── Filtrar por umbral mínimo ────────────────────────────────────────────
-    filtered = [
-        (name, conf) for name, conf in all_results
-        if conf >= CNN_CONFIDENCE_THRESHOLD
-    ]
+    detected = [(n, s) for n, s in ranked if s >= CLIP_MIN_SIMILARITY]
 
-    # Si ninguno supera el umbral, devolver solo el top-1 como mejor esfuerzo
-    if not filtered:
-        filtered = all_results[:1]
+    # Garantizar mínimo CLIP_MIN_RESULTS aunque estén bajo el threshold
+    low_confidence = len(detected) < CLIP_MIN_RESULTS
+    if low_confidence:
+        detected = ranked[:CLIP_MIN_RESULTS]
 
-    return filtered[:CNN_MAX_RESULTS], low_confidence_image
+    return detected[:CLIP_MAX_RESULTS], low_confidence
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FUNCIÓN 5 — búsqueda de imagen de ingrediente
-# ─────────────────────────────────────────────────────────────────────────────
 def get_ingredient_image(name: str) -> str | None:
-    """Búsqueda difusa del nombre en el catálogo (umbral 72); devuelve ruta o None."""
     hit = rfprocess.extractOne(name.lower(), _catalog_keys)
     if hit and hit[1] >= 72:
         return ingredient_catalog[hit[0]]
     return None
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FUNCIÓN 2 — recuperación de recetas  (también devuelve cadena de consulta + puntuaciones)
-# ─────────────────────────────────────────────────────────────────────────────
 def _parse_dietary(raw) -> list[str]:
     if isinstance(raw, list):
         return [str(x).lower() for x in raw]
@@ -264,7 +230,6 @@ def _parse_dietary(raw) -> list[str]:
     except Exception:
         return [str(raw).lower()]
 
-
 def _stringify(val) -> str:
     if isinstance(val, list):
         return ", ".join(str(x) for x in val)
@@ -272,7 +237,6 @@ def _stringify(val) -> str:
         return ", ".join(str(x) for x in json.loads(val))
     except Exception:
         return str(val) if pd.notna(val) else ""
-
 
 def _choice_values_from_columns(frame: pd.DataFrame, columns: list[str], limit: int = 40) -> list[str]:
     values: set[str] = set()
@@ -285,15 +249,12 @@ def _choice_values_from_columns(frame: pd.DataFrame, columns: list[str], limit: 
                     values.add(item)
     return ["any"] + sorted(values)[:limit]
 
-
 DISH_TYPE_CHOICES = _choice_values_from_columns(df, DISH_TYPE_COLS)
-
 
 def _contains_choice(raw, choice: str) -> bool:
     if choice == "any":
         return True
     return choice.lower() in _stringify(raw).lower()
-
 
 def _text_blob(row: dict) -> str:
     parts = [
@@ -309,7 +270,6 @@ def _text_blob(row: dict) -> str:
     ]
     return " ".join(_stringify(p).lower() for p in parts if p is not None)
 
-
 def _ingredient_overlap(query_terms: list[str], row: dict) -> float:
     terms = [t.lower().strip() for t in query_terms if t and t.strip()]
     if not terms:
@@ -317,11 +277,9 @@ def _ingredient_overlap(query_terms: list[str], row: dict) -> float:
     blob = _text_blob(row)
     return sum(1 for term in terms if term in blob) / len(terms)
 
-
 def _has_dish_image(row: dict) -> float:
     path = row.get("dish_image_path") or row.get("image_path") or ""
     return 1.0 if path and Path(path).exists() else 0.0
-
 
 class MLPReranker(torch.nn.Module):
     """Pequeño MLP determinista sobre características de recuperación/filtrado."""
@@ -354,9 +312,7 @@ class MLPReranker(torch.nn.Module):
         tensor = torch.tensor(features, dtype=torch.float32)
         return self.net(tensor).squeeze(-1).tolist()
 
-
 reranker = MLPReranker()
-
 
 def rerank_recipes(
     cands: pd.DataFrame,
@@ -381,7 +337,6 @@ def rerank_recipes(
     ranked["_rerank_score"] = reranker.score(features)
     return ranked.sort_values("_rerank_score", ascending=False)
 
-
 def retrieve_recipes(
     ingredients: list[str],
     dietary_filter: str = "any",
@@ -389,7 +344,6 @@ def retrieve_recipes(
     dish_type_filter: str = "any",
     k: int = 5,
 ) -> tuple[list[dict], str, list[float]]:
-    """Devuelve (lista_recetas, texto_consulta, puntuaciones_reranker)."""
     query = "ingredients: " + ", ".join(ingredients)
     emb   = embedding_model.encode([query], normalize_embeddings=True).astype("float32")
 
@@ -417,10 +371,6 @@ def retrieve_recipes(
     top = top.drop_duplicates(subset=["recipe_title"], keep="first")
     return top.to_dict(orient="records"), query, scores
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FUNCIÓN 3 — narración LLM en streaming  (LLM lazy)
-# ─────────────────────────────────────────────────────────────────────────────
 def _narration_prompt(row: dict) -> str:
     title = row.get("recipe_title", "Unknown recipe")
     ingr  = row.get(INGR_COL) or row.get("ingredients_text_processed", "")
@@ -441,7 +391,6 @@ def _narration_prompt(row: dict) -> str:
         "<|assistant|>\n"
     )
 
-
 def build_recipe_detail_md(row: dict | None, detected_names: list[str] | None = None) -> str:
     if not row:
         return "Selecciona una receta para ver ingredientes y procedimiento."
@@ -454,7 +403,6 @@ def build_recipe_detail_md(row: dict | None, detected_names: list[str] | None = 
     speed = row.get("cook_speed", "")
     meta = " · ".join(str(x) for x in [cuisine, dietary, speed] if str(x).strip())
 
-    # ── Resaltar ingredientes detectados ──────────────────────────────────
     if detected_names:
         for name in detected_names:
             # Reemplaza solo si el nombre aparece como palabra completa
@@ -471,25 +419,15 @@ def build_recipe_detail_md(row: dict | None, detected_names: list[str] | None = 
         f"**Procedimiento**\n\n{directions or 'No disponible'}"
     )
 
-
 def generate_recipe(recipe_row: dict | None):
-    """Generador — hace streaming de la narración; muestra gr.Info en la primera carga del LLM."""
     if not recipe_row:
         yield "Selecciona una receta de la tabla de arriba y haz clic en 'Narrar'."
         return
-    if not _llm_loaded():
-        gr.Info("Cargando el modelo de lenguaje por primera vez (~25 s) — por favor espera…")
-    model       = get_llm()
-    accumulated = ""
-    for chunk in model(_narration_prompt(recipe_row), max_tokens=512, temperature=0.7, stream=True):
-        accumulated += chunk["choices"][0]["text"]
-        yield accumulated
+    try:
+        yield _llm_generate(_narration_prompt(recipe_row), max_new_tokens=200)
+    except Exception as e:
+        yield f"Error al generar la narración: {e}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FUNCIÓN 4 — chat sobre la receta activa  (LLM lazy)
-# max_tokens reducido de 300 → 150
-# ─────────────────────────────────────────────────────────────────────────────
 def chat_about_recipe(message, history, recipe_state):
     if not message.strip():
         return history, ""
@@ -503,24 +441,18 @@ def chat_about_recipe(message, history, recipe_state):
     else:
         sys_msg = "You are a helpful cooking assistant. Be brief and clear."
 
-    if not _llm_loaded():
-        gr.Info("Cargando el modelo de lenguaje por primera vez (~25s) — por favor espera...")
-    model  = get_llm()
     prompt = (
         f"<|system|>\n{sys_msg}\n</s>\n"
         f"<|user|>\n{message}\n</s>\n"
         "<|assistant|>\n"
     )
-    reply = model(prompt, max_tokens=150, temperature=0.7, stream=False)["choices"][0]["text"].strip()
+    try:
+        reply = _llm_generate(prompt, max_new_tokens=150).strip()
+    except Exception as e:
+        reply = f"Error: {e}"
     return history + [[message, reply]], ""
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CORRECCIÓN — panel HTML de ingredientes  (tarjeta con imagen O badge de texto coloreado)
-# colores verde/naranja/rojo según nivel de confianza
-# ─────────────────────────────────────────────────────────────────────────────
 def _img_to_b64(path: str) -> str | None:
-    """Codifica una imagen local como data-URI en base64 para incrustarla en HTML."""
     try:
         ext  = Path(path).suffix.lstrip(".").lower()
         mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
@@ -531,35 +463,23 @@ def _img_to_b64(path: str) -> str | None:
         return None
 
 def _confidence_style(conf: float) -> tuple[str, str, str]:
-    """
-    Devuelve (color_borde, color_fondo_badge, emoji) según el nivel de confianza.
-    Verde   = conf >= 0.60  → modelo confiado
-    Naranja = 0.30 <= conf < 0.60 → confianza media
-    Rojo    = conf < 0.30  → baja confianza, verificar manualmente
-    """
     if conf >= 0.60:
-        return "#4CAF50", "#e8f5e9", "✅"   # Verde
+        return "#4CAF50", "#e8f5e9", "ok"   # Verde
     elif conf >= 0.30:
-        return "#FF9800", "#fff3e0", "⚠️"  # Naranja
+        return "#FF9800", "#fff3e0", "!"  # Naranja
     else:
-        return "#f44336", "#ffebee", "❓"  # Rojo
+        return "#f44336", "#ffebee", "?"  # Rojo
 
 def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: bool = False) -> str:
-    """
-    Panel HTML para ingredientes detectados.
-    Sistema de semáforo (verde/naranja/rojo) según confianza.
-    Advertencia si la confianza global de la imagen es baja.
-    """
     warning_html = ""
     if low_confidence:
-        # Advertencia visible cuando la imagen no es ideal
         warning_html = (
             '<div style="background:#fff3e0;border-left:4px solid #FF9800;'
             'padding:8px 12px;margin-bottom:8px;border-radius:4px;color:#7a5c00 !important">'
             '<p style="margin:0;font-size:13px;color:#7a5c00 !important;font-weight:bold">'
-            '⚠️ <b>Imagen poco clara para el modelo.</b> '
-            'Para mejores resultados, sube una foto de un único ingrediente crudo '
-            'sobre fondo claro. Puedes corregir esto usando la búsqueda de texto abajo.'
+            '<b>Imagen poco clara para el modelo.</b> '
+            'Para mejores resultados, sube una foto con varios ingredientes visibles. '
+            'También puedes escribirlos directamente en el campo de texto.'
             '</p>'
             '</div>'
         )
@@ -571,7 +491,6 @@ def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: boo
         path = get_ingredient_image(name)
         src  = _img_to_b64(path) if path and Path(path).exists() else None
 
-        # ── Barra de progreso visual ──────────────────────────────────────
         bar_html = (
             f'<div style="width:90px;height:6px;background:#e0e0e0;'
             f'border-radius:3px;margin:3px auto 1px auto">'
@@ -581,10 +500,8 @@ def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: boo
             f'</div>'
             f'<div style="font-size:10px;color:#888;text-align:center">{pct}</div>'
         )
-        # ─────────────────────────────────────────────────────────────────
 
         if src:
-            # Tarjeta con imagen real + borde de semáforo
             cards.append(
                 f'<div style="text-align:center;margin:6px;width:110px">'
                 f'<img src="{src}" style="width:100px;height:100px;'
@@ -595,7 +512,6 @@ def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: boo
                 f'</div>'
             )
         else:
-            # Badge de texto con color de semáforo de fondo
             cards.append(
                 f'<div style="text-align:center;margin:6px;width:110px;'
                 f'display:flex;flex-direction:column;align-items:center;justify-content:center">'
@@ -606,12 +522,11 @@ def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: boo
                 f'</div>'
             )
 
-    # Leyenda del semáforo
     legend_html = (
         '<div style="font-size:11px;color:#888;padding:4px 8px;margin-top:4px">'
-        '✅ Alta confianza (&ge;60%) &nbsp;|&nbsp; '
-        '⚠️ Media (30-60%) &nbsp;|&nbsp; '
-        '❓ Baja (&lt;30%) — considera corregir mediante texto'
+        'Alta confianza (&ge;60%) &nbsp;|&nbsp; '
+        'Media (30-60%) &nbsp;|&nbsp; '
+        'Baja (&lt;30%) — considera corregir mediante texto'
         '</div>'
     )
 
@@ -624,10 +539,6 @@ def build_ingredient_html(top_ingr: list[tuple[str, float]], low_confidence: boo
         + legend_html
     )
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GALERÍA DE PLATOS
-# ─────────────────────────────────────────────────────────────────────────────
 def build_dish_gallery(recipes: list[dict]) -> list[tuple[Image.Image, str]]:
     items: list[tuple[Image.Image, str]] = []
     for row in recipes:
@@ -642,14 +553,6 @@ def build_dish_gallery(recipes: list[dict]) -> list[tuple[Image.Image, str]]:
         items.append((img, row.get("recipe_title", "Receta")))
     return items
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# OPTIMIZACIÓN 3 — MANEJADOR DE BÚSQUEDA EN DOS FASES
-#   Fase 1 (esta función, <3 s): CNN + FAISS → paneles A, B, debug
-#   Fase 2 (clic en narrate_btn, ~30 s): narración LLM bajo demanda
-#   advertencia si se proporcionan imagen y texto simultáneamente
-#   mensajes de error más amigables para el usuario
-# ─────────────────────────────────────────────────────────────────────────────
 def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progress()):
     """
     Salidas (9):
@@ -658,14 +561,12 @@ def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progr
     """
     t_total = time.perf_counter()
 
-    # Validación con mensaje amigable
     if image is None and not (text_query or "").strip():
         raise gr.Error(
             "Por favor sube una foto de un ingrediente O escribe ingredientes "
             "separados por comas (p. ej., tomate, cebolla, ajo)."
         )
 
-    # Advertir si el usuario proporciona TANTO imagen como texto
     if image is not None and (text_query or "").strip():
         gr.Warning(
             "Se han proporcionado imagen y texto. Se usará la imagen para la detección. "
@@ -674,45 +575,42 @@ def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progr
 
     debug: dict = {
         "modelos": {
-            "cnn":      f"EfficientNet-B0 ({NUM_CLASSES} clases) | umbral de confianza: {CNN_CONFIDENCE_THRESHOLD*100:.0f}%",
+            "clip":     f"clip-ViT-B-32 zero-shot | umbral similitud: {CLIP_MIN_SIMILARITY} | max ingredientes: {CLIP_MAX_RESULTS}",
             "embed":    f"{_EMBED_SHORT} (coseno)",
             "reranker": "Reranker MLP sobre puntuación FAISS + solapamiento + filtros + señal de imagen",
-            "llm":      "TinyLlama-1.1B-Chat Q4_K_M (lazy — carga al Narrar)",
+            "llm":      f"HF Inference API → {LLM_REPO}  (~2-5s)",
         },
-        "consulta":             "",
-        "puntuaciones_reranker":   {},
-        "tiempos_ms":         {},
-        "cnn_baja_confianza": False,
+        "consulta":              "",
+        "puntuaciones_reranker": {},
+        "tiempos_ms":            {},
+        "clip_sin_deteccion":    False,
     }
 
-    # ── Fase 1a: clasificar imagen o parsear texto ────────────────────────
     top_ingr: list[tuple[str, float]]
     low_confidence = False
 
     if image is not None:
-        if not _cnn_loaded():
-            gr.Info("Cargando el clasificador de ingredientes por primera vez (~15s)…")
-        progress(0.15, desc="Clasificando ingredientes en la imagen…")
+        if not _clip_loaded():
+            gr.Info("Buscando por favor espera…")
+        progress(0.15, desc="Detectando ingredientes en la imagen…")
         t0 = time.perf_counter()
 
-        top_ingr, low_confidence = classify_ingredients(image)
-        debug["tiempos_ms"]["cnn_ms"]         = round((time.perf_counter() - t0) * 1000)
-        debug["cnn_baja_confianza"]           = low_confidence
+        top_ingr, low_confidence = detect_ingredients_clip(image)
+        debug["tiempos_ms"]["clip_ms"]       = round((time.perf_counter() - t0) * 1000)
+        debug["clip_sin_deteccion"]          = low_confidence
         names = [n for n, _ in top_ingr]
     else:
         names    = [s.strip() for s in text_query.split(",") if s.strip()]
         top_ingr = [(n, 1.0) for n in names[:10]]
-        debug["tiempos_ms"]["cnn_ms"] = 0
+        debug["tiempos_ms"]["clip_ms"] = 0
 
     if not names:
         raise gr.Error(
-            "No se pudieron extraer nombres de ingredientes de la entrada. "
-            "Si usas una imagen, prueba con una foto de UN ÚNICO ingrediente crudo "
-            "sobre fondo blanco. También puedes escribir los ingredientes "
+            "No se pudieron extraer ingredientes de la imagen. "
+            "Prueba con una foto más clara o escribe los ingredientes "
             "directamente en el campo de texto."
         )
 
-    # ── Fase 1b: embeddings + búsqueda FAISS ─────────────────────────────
     progress(0.45, desc="Buscando entre 64k recetas…")
     t0 = time.perf_counter()
     recipes, query_text, scores = retrieve_recipes(names, dietary, speed, dish_type)
@@ -729,7 +627,6 @@ def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progr
             "Prueba cambiando 'Preferencia dietética' y/o 'Velocidad de cocción' a 'any'."
         )
 
-    # ── Fase 1c: construir paneles de resultados ─────────────────────────
     progress(0.75, desc="Construyendo resultados…")
     t0 = time.perf_counter()
 
@@ -755,14 +652,14 @@ def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progr
     elapsed_s = debug["tiempos_ms"]["fase1_total_ms"] / 1000
     faiss_s   = debug["tiempos_ms"]["faiss_ms"] / 1000
 
-    conf_note = " ⚠️ Imagen con baja confianza — verifica los ingredientes detectados." if low_confidence else ""
+    conf_note = " Imagen con baja confianza — verifica los ingredientes detectados." if low_confidence else ""
     status = (
         f"**Fase 1 completa** — {len(recipes)} recetas encontradas "
         f"(FAISS {faiss_s:.2f}s · total {elapsed_s:.2f}s){conf_note} "
         f"| Selecciona una receta de la tabla y pulsa **Narrar** para la narración con IA."
     )
 
-    progress(1.0, desc="Fase 1 lista ✅")
+    progress(1.0, desc="Fase 1 lista")
     return (
         status,
         ingr_html_str,
@@ -775,17 +672,12 @@ def find_recipes(image, text_query, dietary, speed, dish_type, progress=gr.Progr
         debug,
     )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MANEJADORES DE SELECCIÓN
-# ─────────────────────────────────────────────────────────────────────────────
 def select_from_df(evt: gr.SelectData, results: list[dict], detected_names: list[str]) -> tuple:
     if not results:
         return None, "", ""
     row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else 0
     row     = results[min(row_idx, len(results) - 1)]
     return row, f"Seleccionada: **{row.get('recipe_title', 'Receta')}**", build_recipe_detail_md(row, detected_names)
-
-
 
 def select_from_gallery(evt: gr.SelectData, results: list[dict], detected_names: list[str]) -> tuple:
     if not results:
@@ -794,10 +686,6 @@ def select_from_gallery(evt: gr.SelectData, results: list[dict], detected_names:
     row = results[idx]
     return row, f"Seleccionada: **{row.get('recipe_title', 'Receta')}**", build_recipe_detail_md(row, detected_names)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DIAGRAMA DEL PIPELINE — Pestaña 2
-# ─────────────────────────────────────────────────────────────────────────────
 PIPELINE_MD = """\
 ## Cómo funciona el pipeline
 ```
@@ -807,18 +695,19 @@ PIPELINE_MD = """\
   └──────────────┬───────────────────────────────────────────┘
                  │
         ┌────────▼──────────────────────────────────────────┐
-        │  EfficientNet-B0  (carga lazy — solo con foto)    │
-        │  imagen → top-10 predicciones de ingredientes     │
-        │  Fruits-360 + Dataset de Ingredientes ~150 clases │
+        │  CLIP  clip-ViT-B-32  (carga lazy — solo foto)   │
+        │  imagen → similitud vs 394 ingredientes           │
+        │  zero-shot multi-label · prompt ensembling x3     │
+        │  detecta VARIOS ingredientes en una sola foto     │
         └────────┬──────────────────────────────────────────┘
-                 │  lista de ingredientes
+                 │  lista de ingredientes detectados
         ┌────────▼──────────────────────────────────────────┐
         │  multilingual-MiniLM-L12-v2  ·  384-dim           │
         │  "ingredientes: tomate, cebolla, …" → vec float32 │
         └────────┬──────────────────────────────────────────┘
                  │
         ┌────────▼──────────────────────────────────────────┐
-        │  FAISS IndexFlatIP  ·  64k recetas                │
+        │  FAISS IndexFlatIP  ·  62k recetas                │
         │  top-50 → filtros: dieta + velocidad + tipo       │
         └────────┬──────────────────────────────────────────┘
                  │
@@ -828,83 +717,81 @@ PIPELINE_MD = """\
         └────────┬──────────────────────────────────────────┘
                  │        ← FASE 1 COMPLETA  (< 3 s)
         ┌────────▼──────────────────────────────────────────┐
-        │  Top-5 tarjetas de receta                         │
-        │  (título · cocina · etiquetas dietéticas · speed) │
+        │  Top-5 recetas                                    │
+        │  (título · cocina · tipo · velocidad · dieta)    │
         └────────┬──────────────────────────────────────────┘
                  │  usuario hace clic en "Narrar"  ← FASE 2
         ┌────────▼──────────────────────────────────────────┐
-        │  TinyLlama-1.1B-Chat  Q4_K_M  (lazy — ~25 s)     │
-        │  Genera narración amigable  ·  ~30 s en CPU       │
+        │  TinyLlama-1.1B-Chat  (HF Inference API)          │
+        │  GPU compartido de HF  ·  ~3-5 s                  │
         └────────┬──────────────────────────────────────────┘
                  │  usuario escribe en el chat
         ┌────────▼──────────────────────────────────────────┐
-        │  Modo chat: receta inyectada como contexto        │
+        │  Chat: receta activa inyectada como contexto      │
         └───────────────────────────────────────────────────┘
 ```
-### Estrategia de carga lazy
-| Componente | Se carga en | Tiempo aprox. |
+### Componentes y carga
+| Componente | Se carga en | Tiempo |
 |---|---|---|
-| Índice FAISS + dataframe | Arranque de la app | ~2 s |
-| SentenceTransformer | Arranque de la app | ~3 s |
-| EfficientNet-B0 | Primera foto subida | ~10 s (una vez) |
-| TinyLlama GGUF | Primer "Narrar" o Chat | ~25 s (una vez) |
-Tras la primera carga, cada modelo queda cacheado en memoria para todas las peticiones siguientes.
-### Latencia por etapa (CPU tier gratuito, post-carga)
+| Índice FAISS + dataframe (62k recetas) | Arranque de la app | ~2 s |
+| SentenceTransformer multilingual-MiniLM | Arranque de la app | ~3 s |
+| CLIP clip-ViT-B-32 | Primera foto subida | ~20 s (una vez) |
+| TinyLlama-1.1B-Chat (HF Inference API) | Por petición vía GPU de HF | ~3-5 s |
+
+CLIP y el índice FAISS quedan cacheados en memoria tras la primera carga.
+
+### Latencia por etapa (post-carga)
 | Etapa | Tiempo |
 |---|---|
-| Clasificación CNN | < 1 s |
+| Detección CLIP multi-ingrediente | < 1 s |
 | Embedding MiniLM | < 0.5 s |
 | FAISS top-50 + filtros + reranker | < 1.5 s |
 | **Fase 1 total** | **< 3 s** |
-| Narración LLM (512 tokens) | 25–40 s |
-| Respuesta de chat (300 tokens) | 15–25 s |
+| Narración TinyLlama (HF Inference API) | ~3-5 s |
+| Respuesta de chat | ~3-5 s |
+
+### Vocabulario de ingredientes
+394 ingredientes cubiertos, incluyendo frutas, verduras, carnes, lácteos,
+especias, chiles secos mexicanos, hierbas, frutos secos y condimentos.
 """
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INTERFAZ DE USUARIO
-# ─────────────────────────────────────────────────────────────────────────────
 with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Soft()) as demo:
 
-    # Cabecera con instrucciones paso a paso
-    gr.Markdown("# 🍳 Recomendador de Recetas — Demo Multimodal con IA")
+    gr.Markdown("Recomendador de Recetas")
     gr.Markdown("""
 **Cómo usar la aplicación:**
-1. 📸 **Sube una foto** de un **único** ingrediente crudo sobre fondo claro — **O** —
-   ✏️ **Escribe** ingredientes separados por comas (p. ej., *tomate, cebolla, ajo*)
+1. **Sube una foto** con uno o varios ingredientes (tabla de cortar, mercado, nevera) — **O** —
+   **Escribe** ingredientes separados por comas (p. ej., *tomate, cebolla, ajo*)
 2. Ajusta los filtros opcionales (dieta, velocidad, tipo de plato)
-3. 🔍 Haz clic en **Buscar Recetas**
+3. Haz clic en **Buscar Recetas**
 4. Selecciona una receta de la galería o la tabla
-5. ✨ Haz clic en **Narrar Receta** para la narración con IA (~15-25s en CPU)
+5. Haz clic en **Narrar Receta** para la narración con IA (~3-5s)
 
-> 💡 **Consejo de imagen:** Para mejores resultados, usa fotos de catálogo (fondo blanco,
-> ingrediente crudo individual, bien iluminado). Evita envases, platos cocinados o fotos con mucho ruido.
+> **Consejo:** CLIP detecta múltiples ingredientes en una sola foto.
+> Funciona con fotos reales de celular — tabla de cortar, bolsa del super, nevera abierta.
     """)
 
-    # Estado compartido
     recipe_state  = gr.State(None)
     results_state = gr.State([])
     detected_names_state = gr.State([])
 
     with gr.Tabs():
 
-        # ── PESTAÑA 1 — Buscar Recetas ─────────────────────────────────────────
         with gr.Tab("Buscar Recetas"):
             with gr.Row(equal_height=False):
 
-                # ── COLUMNA IZQUIERDA: entradas ────────────────────────────────
                 with gr.Column(scale=1, min_width=300):
                     img_input = gr.Image(
-                        label="📸 Foto de UN ingrediente crudo (fondo claro, sin envase)",
+                        label="Foto con uno o varios ingredientes (tabla de cortar, bolsa del súper, nevera...)",
                         type="pil",
                         height=220,
                     )
                     gr.Markdown(
-                        "<small>💡 Ejemplos ideales: una zanahoria, un tomate, "
-                        "una manzana — sobre una mesa o fondo blanco.</small>"
+                        "<small>CLIP detecta múltiples ingredientes en una sola foto. "
+                        "Funciona con fotos reales de celular.</small>"
                     )
                     text_input = gr.Textbox(
-                        label="✏️ O escribe ingredientes / antojos",
+                        label="O escribe ingredientes / antojos",
                         placeholder="tomate, cebolla, ajo, albahaca  o  pasta vegana rápida...",
                         lines=2,
                     )
@@ -923,7 +810,7 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
                         choices=DISH_TYPE_CHOICES,
                         value="any",
                     )
-                    find_btn = gr.Button("Buscar Recetas 🔍", variant="primary", size="lg")
+                    find_btn = gr.Button("Buscar Recetas", variant="primary", size="lg")
 
                     gr.Examples(
                         examples=[
@@ -939,7 +826,6 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
                         cache_examples=False,
                     )
 
-                # ── COLUMNA DERECHA: resultados ────────────────────────────────
                 with gr.Column(scale=2):
 
                     search_status = gr.Markdown(
@@ -972,7 +858,7 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
                             "Selecciona una receta para ver ingredientes y procedimiento."
                         )
                         narrate_btn = gr.Button(
-                            "✨ Narrar receta seleccionada (~15-25s en CPU) ▶",
+                            "Narrar receta seleccionada (~3-5s)",
                             variant="secondary",
                         )
                         narration_box = gr.Textbox(
@@ -980,16 +866,14 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
                             interactive=False,
                             placeholder=(
                                 "⏳ Selecciona una receta arriba y haz clic en 'Narrar'.\n\n"
-                                "La primera narración tarda ~25s ya que carga el modelo de lenguaje. "
-                                "Las siguientes serán más rápidas (~15s). "
-                                "Mientras esperas, puedes leer el procedimiento de la receta arriba."
+                                "La narración usa HF Inference API (~3-5s)."
                             ),
                             show_copy_button=True,
                             label="Narración Generada por IA",
                         )
 
                     with gr.Accordion(
-                        "Chat sobre esta receta [TinyLlama · ~10-15s por respuesta en CPU]",
+                        "Chat sobre esta receta [~3-5s por respuesta vía HF Inference API]",
                         open=True,
                     ):
                         chatbot = gr.Chatbot(height=300, bubble_full_width=False)
@@ -1009,11 +893,8 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
                         )
                         pipeline_debug_json = gr.JSON(label="", value={})
 
-        # ── PESTAÑA 2 — Cómo funciona ──────────────────────────────────────────
         with gr.Tab("Cómo funciona"):
             gr.Markdown(PIPELINE_MD)
-
-# ── MANEJADORES DE EVENTOS ────────────────────────────────────────────────────
 
     find_btn.click(
         fn=find_recipes,
@@ -1062,8 +943,5 @@ with gr.Blocks(title="Recomendador de Recetas (optimizado)", theme=gr.themes.Sof
 
     clear_btn.click(fn=lambda: ([], ""), outputs=[chatbot, chat_input])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LANZAMIENTO
-# ─────────────────────────────────────────────────────────────────────────────
 demo.queue(max_size=3)
 demo.launch()

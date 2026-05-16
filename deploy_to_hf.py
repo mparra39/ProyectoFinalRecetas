@@ -1,26 +1,3 @@
-"""
-deploy_to_hf.py
-===============
-End-to-end deployment of the recipe recommender Hugging Face Space.
-
-Steps:
-  1. Verify all required files exist locally (table with sizes + status).
-  2. Stage large artifacts into space_repo/ (copy if not already there).
-  3. Create the Space repo if it does not exist.
-  4. Upload space_repo/ via api.upload_folder().
-  5. Poll until the Space is RUNNING (max 5 minutes).
-  6. Smoke test via gradio_client or raw HTTP.
-  7. Print final checklist for the project report.
-
-Usage:
-    export HF_TOKEN="hf_..."
-    export HF_USERNAME="your-username"
-    python deploy_to_hf.py
-
-    # Skip the slow LLM smoke test:
-    python deploy_to_hf.py --skip-smoke
-"""
-
 import argparse
 import os
 import shutil
@@ -40,9 +17,6 @@ try:
 except ImportError:
     sys.exit("Run: pip install tqdm")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────────────────────
 from recetas.config import DATA, MODELS, SPACE_REPO_DIR, HF as _HF_CFG
 
 HF_TOKEN      = _HF_CFG.token
@@ -63,31 +37,25 @@ CYAN   = "\033[36m" if _USE_COLOR else ""
 BOLD   = "\033[1m"  if _USE_COLOR else ""
 RESET  = "\033[0m"  if _USE_COLOR else ""
 
-OK      = f"{GREEN}✓ OK{RESET}"
-MISSING = f"{RED}✗ MISSING{RESET}"
-WARN    = f"{YELLOW}⚠ WARN{RESET}"
-
+OK      = f"{GREEN}OK{RESET}"
+MISSING = f"{RED}MISSING{RESET}"
+WARN    = f"{YELLOW}WARN{RESET}"
 
 def _c(text: str, code: str) -> str:
     return f"{code}{text}{RESET}"
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 # FILE MANIFEST
 # (name, source_directory, description)
-# ─────────────────────────────────────────────────────────────────────────────
 MANIFEST: list[tuple[str, Path, str]] = [
-    # ── code / config (en space_repo/) ──────────────────────────────────────
     ("app_optimized.py", SPACE_DIR, "Gradio application (active)"),
     ("requirements.txt", SPACE_DIR, "Python dependencies"),
     ("README.md",        SPACE_DIR, "HF Space metadata"),
     (".gitattributes",   SPACE_DIR, "Git LFS config"),
     ("packages.txt",     SPACE_DIR, "OS-level packages"),
-    # ── artefactos grandes (en data/processed/ y models/) ────────────────────
     (DATA.faiss_index.name,      DATA.faiss_index.parent,      "FAISS vector index"),
     (DATA.final_parquet.name,    DATA.final_parquet.parent,    "Recipe dataframe"),
     (DATA.ingredient_catalog.name, DATA.ingredient_catalog.parent, "Ingredient catalog"),
-    (MODELS.class_labels.name,   MODELS.class_labels.parent,   "CNN class labels (opcional)"),
+    (MODELS.class_labels.name,   MODELS.class_labels.parent,   "CLIP ingredient labels"),
 ]
 
 # Artefactos que viven fuera de space_repo/ y deben copiarse allí antes del upload
@@ -110,10 +78,6 @@ IGNORE_PATTERNS = [
     ".DS_Store",
 ]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 0 — credential check
-# ─────────────────────────────────────────────────────────────────────────────
 def check_credentials() -> None:
     errors = []
     if not HF_TOKEN:
@@ -128,17 +92,13 @@ def check_credentials() -> None:
     print(f"  Deploying as  : {_c(HF_USERNAME, BOLD)}")
     print(f"  Space repo    : {_c(SPACE_REPO, CYAN)}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — verify local files
-# ─────────────────────────────────────────────────────────────────────────────
 def step1_verify_files() -> bool:
     print(f"\n{BOLD}STEP 1  — Verifying local files{RESET}")
     print(f"  {'File':<35} {'Size':>10}   {'Source':<15} Status")
     print("  " + "─" * 75)
 
     # Archivos opcionales — no bloquean el deploy
-    OPTIONAL = {"class_labels.json", "efficientnet_ingredients.pth"}
+    OPTIONAL = {"class_labels.json"}
 
     all_ok = True
     for name, src_dir, desc in MANIFEST:
@@ -161,15 +121,11 @@ def step1_verify_files() -> bool:
             print("    • df_final_embeddings.parquet: ejecuta translate_and_rebuild.py primero")
     return all_ok
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — stage large artifacts into space_repo/
-# ─────────────────────────────────────────────────────────────────────────────
 def step2_stage_artifacts() -> None:
     print(f"\n{BOLD}STEP 2  — Staging artifacts into {SPACE_DIR}/{RESET}")
     SPACE_DIR.mkdir(parents=True, exist_ok=True)
 
-    OPTIONAL = {"class_labels.json", "efficientnet_ingredients.pth"}
+    OPTIONAL = {"class_labels.json"}
     for src, dest in ARTIFACTS_TO_STAGE:
         name = src.name
         if not src.exists():
@@ -186,10 +142,6 @@ def step2_stage_artifacts() -> None:
         shutil.copy2(src, dest)
         print(f"{OK}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — create Space repo if needed
-# ─────────────────────────────────────────────────────────────────────────────
 def step3_create_space(api: HfApi) -> None:
     print(f"\n{BOLD}STEP 3  — Creating Space repo{RESET}")
     create_repo(
@@ -207,10 +159,6 @@ def step3_create_space(api: HfApi) -> None:
     except Exception as exc:
         print(f"  {WARN}  Could not fetch Space info: {exc}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — upload folder
-# ─────────────────────────────────────────────────────────────────────────────
 def step4_upload(api: HfApi) -> None:
     print(f"\n{BOLD}STEP 4  — Uploading {SPACE_DIR} to Hub{RESET}")
 
@@ -233,15 +181,10 @@ def step4_upload(api: HfApi) -> None:
 
     print(f"  Upload complete {OK}")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — poll for RUNNING status
-# ─────────────────────────────────────────────────────────────────────────────
 # States that mean we should keep waiting
 _TRANSIENT = {"BUILDING", "RUNNING_BUILDING", "SLEEP", "PAUSED"}
 # States that mean we should abort
 _FATAL     = {"CONFIG_ERROR", "BUILD_ERROR", "NO_APP_FILE"}
-
 
 def step5_wait_for_running(api: HfApi, max_polls: int = 30, interval: int = 10) -> bool:
     print(f"\n{BOLD}STEP 5  — Waiting for Space to become RUNNING{RESET}")
@@ -282,10 +225,6 @@ def step5_wait_for_running(api: HfApi, max_polls: int = 30, interval: int = 10) 
     print(f"  Check manually:  {_c(space_url, CYAN)}")
     return False
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 — smoke test
-# ─────────────────────────────────────────────────────────────────────────────
 # Gradio 4.x queue-based POST payload for fn_index 0 (find_recipes)
 _SMOKE_PAYLOAD = {
     "data": [
@@ -300,7 +239,6 @@ _SMOKE_PAYLOAD = {
 }
 
 _SPACE_HOST = f"https://{HF_USERNAME}-{HF_SPACE_NAME.replace('_', '-').lower()}.hf.space"
-
 
 def _smoke_via_gradio_client() -> bool:
     """Preferred path: uses gradio_client which handles the queue protocol."""
@@ -328,7 +266,6 @@ def _smoke_via_gradio_client() -> bool:
     except Exception as exc:
         print(f"  gradio_client call failed: {exc}")
         return False
-
 
 def _smoke_via_requests() -> bool:
     """Fallback: raw HTTP POST to the Gradio /run/predict endpoint."""
@@ -365,7 +302,6 @@ def _smoke_via_requests() -> bool:
         print(f"  {RED}JSON parse error:{RESET} {exc}  |  raw: {resp.text[:200]}")
         return False
 
-
 def step6_smoke_test() -> bool:
     print(f"\n{BOLD}STEP 6  — Smoke test{RESET}")
     print(f"  Endpoint: {_c(_SPACE_HOST, CYAN)}")
@@ -375,16 +311,12 @@ def step6_smoke_test() -> bool:
     ok = _smoke_via_gradio_client() or _smoke_via_requests()
 
     if ok:
-        print(f"  {GREEN}{BOLD}Smoke test PASSED ✓{RESET}")
+        print(f"  {GREEN}{BOLD}Smoke test PASSED{RESET}")
     else:
         print(f"  {YELLOW}Smoke test could not be verified automatically.{RESET}")
         print(f"  Test manually:  {_c(f'https://huggingface.co/spaces/{SPACE_REPO}', CYAN)}")
     return ok
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 7 — final checklist
-# ─────────────────────────────────────────────────────────────────────────────
 def step7_print_checklist(smoke_ok: bool) -> None:
     smoke_badge = f"{GREEN}PASS{RESET}" if smoke_ok else f"{YELLOW}MANUAL CHECK NEEDED{RESET}"
     print(f"""
@@ -392,32 +324,34 @@ def step7_print_checklist(smoke_ok: bool) -> None:
 {BOLD}  CHECKLIST PARA EL REPORTE{RESET}
 {BOLD}{'=' * 62}{RESET}
 
-  Space URL :  https://huggingface.co/spaces/{SPACE_REPO}
-  CNN repo  :  https://huggingface.co/{_HF_CFG.cnn_repo}
-  LLM repo  :  https://huggingface.co/{_HF_CFG.llm_repo}
-  Dataset   :  https://huggingface.co/datasets/wafaaelhusseini/extended-recipes-dataset-64k-dishes
+  Space URL  :  https://huggingface.co/spaces/{SPACE_REPO}
+  LLM repo   :  https://huggingface.co/Grupo-Parquet-ITESO/tinyllama-recipes-merged
+  CLIP model :  clip-ViT-B-32  (descargado en runtime desde HF Hub)
+  Dataset    :  https://huggingface.co/datasets/wafaaelhusseini/extended-recipes-dataset-64k-dishes
 
   Modos de entrada implementados:
-    {GREEN}[x]{RESET} Foto de ingrediente  →  CNN  →  FAISS
-    {GREEN}[x]{RESET} Texto libre          →  FAISS
-    {GREEN}[x]{RESET} Filtros (dieta, velocidad)
+    {GREEN}[x]{RESET} Foto con múltiples ingredientes  →  CLIP zero-shot  →  FAISS
+    {GREEN}[x]{RESET} Texto libre                      →  FAISS
+    {GREEN}[x]{RESET} Filtros (dieta, velocidad, tipo de plato)
     {GREEN}[x]{RESET} Ejemplos predefinidos (gr.Examples)
 
   Salidas implementadas:
-    {GREEN}[x]{RESET} Panel A — Ingredientes detectados (imagen o badge de color)
+    {GREEN}[x]{RESET} Panel A — Ingredientes detectados (imagen o badge + similitud CLIP)
     {GREEN}[x]{RESET} Panel B — Top-5 recetas con imagen del platillo
-    {GREEN}[x]{RESET} Panel C — Receta narrada por LLM (streaming, lazy load)
-    {GREEN}[x]{RESET} Panel D — Chat sobre la receta activa (TinyLlama)
+    {GREEN}[x]{RESET} Panel C — Receta narrada por LLM (streaming, HF Inference API ~3-5s)
+    {GREEN}[x]{RESET} Panel D — Chat sobre la receta activa
     {GREEN}[x]{RESET} Panel E — Transparencia del pipeline (query + scores + timing)
 
   Optimizaciones:
-    {GREEN}[x]{RESET} lru_cache + threading.Lock en CNN y LLM
+    {GREEN}[x]{RESET} lru_cache + threading.Lock en CLIP y LLM
     {GREEN}[x]{RESET} Carga lazy — tiempo de arranque del Space < 5 s
     {GREEN}[x]{RESET} Resultados en dos fases: Phase 1 < 3 s, Phase 2 on-demand
-    {GREEN}[x]{RESET} Git LFS para .gguf / .index / .parquet / .npy / .pth
+    {GREEN}[x]{RESET} Git LFS para .index / .parquet
+    {GREEN}[x]{RESET} CLIP multi-label: detecta varios ingredientes en una sola foto
 
   Infraestructura:
     {GREEN}[x]{RESET} CPU-only (tier gratuito de HF Spaces)
+    {GREEN}[x]{RESET} LLM vía HF Inference API (GPU compartido de HF)
     {GREEN}[x]{RESET} queue(max_size=3) para throttling
     {GREEN}[x]{RESET} packages.txt: libgomp1 (OpenMP para FAISS + PyTorch)
 
@@ -425,10 +359,6 @@ def step7_print_checklist(smoke_ok: bool) -> None:
 {BOLD}{'=' * 62}{RESET}
 """)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(description="Deploy recipe recommender Space to HF Hub")
     parser.add_argument(
@@ -447,11 +377,9 @@ def main() -> None:
     print(f"{BOLD}  Recipe Demo — HF Space Deployment{RESET}")
     print(f"{BOLD}{'=' * 62}{RESET}")
 
-    # ── credentials ───────────────────────────────────────────────────────────
     check_credentials()
     api = HfApi(token=HF_TOKEN)
 
-    # ── step 1 ─────────────────────────────────────────────────────────────
     files_ok = step1_verify_files()
     if not files_ok:
         print(f"\n{RED}Aborting — fix missing files before deploying.{RESET}")
@@ -460,19 +388,14 @@ def main() -> None:
     if args.skip_upload:
         print(f"\n{YELLOW}--skip-upload set: skipping steps 2-4.{RESET}")
     else:
-        # ── step 2 ─────────────────────────────────────────────────────────
-        step2_stage_artifacts()
+            step2_stage_artifacts()
 
-        # ── step 3 ─────────────────────────────────────────────────────────
-        step3_create_space(api)
+            step3_create_space(api)
 
-        # ── step 4 ─────────────────────────────────────────────────────────
-        step4_upload(api)
+            step4_upload(api)
 
-    # ── step 5 ─────────────────────────────────────────────────────────────
     running = step5_wait_for_running(api)
 
-    # ── step 6 ─────────────────────────────────────────────────────────────
     smoke_ok = False
     if args.skip_smoke:
         print(f"\n{BOLD}STEP 6  — Smoke test{RESET}  {YELLOW}(skipped){RESET}")
@@ -481,9 +404,7 @@ def main() -> None:
     else:
         print(f"\n{BOLD}STEP 6  — Smoke test{RESET}  {YELLOW}(skipped — Space not RUNNING){RESET}")
 
-    # ── step 7 ─────────────────────────────────────────────────────────────
     step7_print_checklist(smoke_ok)
-
 
 if __name__ == "__main__":
     main()
